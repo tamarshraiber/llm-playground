@@ -5,6 +5,16 @@ import re
 import time
 import os
 from dotenv import load_dotenv
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+
+class ToolCall(BaseModel):
+    tool: str
+    args: Dict[str, Any] = {}
+
+class FinalAnswer(BaseModel):
+    tool: Optional[str] = None
+    answer: str
 
 load_dotenv()
 
@@ -24,24 +34,27 @@ tools_map = {
 SYSTEM_PROMPT = """
 You are an AI agent.
 
-You MUST respond in one of two JSON formats only:
+You can call tools multiple times before giving a final answer.
 
-1. Tool call:
+If you need data:
+Return only:
 {
   "tool": "tool_name",
   "args": {}
 }
 
-2. Final answer:
+When done:
 {
   "tool": null,
-  "answer": "final answer here"
+  "answer": "final answer"
 }
 
 Available tools:
 - get_cpu_usage
 - get_memory_usage
 - get_disk_usage
+
+If user asks about computer health → always check all tools before final answer.
 """
 
 def run_agent(question):
@@ -62,23 +75,27 @@ def run_agent(question):
         clean = extract_json(text)
         try:
             data = json.loads(clean)
-        except Exception:
-            print("⚠️ bad JSON from model, skipping step")
+
+            if data.get("tool") is not None:
+                data = ToolCall.model_validate(data).model_dump()
+            else:
+                data = FinalAnswer.model_validate(data).model_dump()
+        except Exception as e:
+            print(f"⚠️ Invalid response: {e}")
             continue
 
-        if data["tool"]:
+        if data.get("tool") is not None:
             tool_name = data.get("tool")
             if tool_name is None:
                 print("⚠️ No tool returned")
                 continue
-            result = tools_map[tool_name]()
-
+           
             if tool_name not in tools_map:
                 print(f"⚠️ Unknown tool: {tool_name}")
                 continue
 
-            result = tools_map[tool_name]()
-            
+            result = tools_map[tool_name](**data.get("args", {}))
+
             print("📦 Tool result:", result)
 
             messages += f"\nObservation: {result}"
@@ -128,8 +145,9 @@ def call_llm(messages):
 
 if __name__ == "__main__":
     print("=== AGENT START ===")
+    run_agent("How is my computer doing?")
     # run_agent("How is my Memory doing?")
-    run_agent("How is my Memory doing?")
+    # run_agent("How is my Memory doing?")
     # run_agent("How is my computer doing?")
     # run_agent("How is my disk doing?")
     # run_agent("Say hello")
